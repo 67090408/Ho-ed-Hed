@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ฟาร์มเห็ด – ควบคุมสภาพอากาศ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&family=Press+Start+2P&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<style>
+:root{
+  color-scheme: light;
+  --ink:#2a1512; --red:#e0281f; --red-d:#a31510; --white:#fffdf8; --yellow:#f9c80e;
+  --green:#2e9b45; --blue:#2f7de1; --muted:#6f5a55; --soft:#f0d9d4;
+}
+*{box-sizing:border-box}
+body{margin:0;color:var(--ink);font:400 16px/1.5 'Kanit','Sarabun',system-ui,sans-serif;font-variant-numeric:tabular-nums;
+  background-color:#fff;
+  background-image:linear-gradient(45deg,#fdeceb 25%,transparent 25%,transparent 75%,#fdeceb 75%),linear-gradient(45deg,#fdeceb 25%,transparent 25%,transparent 75%,#fdeceb 75%);
+  background-size:48px 48px;background-position:0 0,24px 24px}
+.wrap{max-width:980px;margin:0 auto;padding:26px 18px 0}
+.px{font-family:'Press Start 2P',monospace}
+
+/* mushroom cap header */
+.cap{position:relative;height:150px;background:var(--red);border:4px solid var(--ink);border-bottom:0;
+  border-radius:200px 200px 0 0/150px 150px 0 0;overflow:hidden;display:flex;align-items:flex-end;justify-content:center;
+  padding-bottom:16px;box-shadow:inset 0 -14px 0 var(--red-d)}
+.cap::before{content:"";position:absolute;inset:0;background:
+  radial-gradient(circle at 10% 62%,#fff 0 26px,transparent 27px),
+  radial-gradient(circle at 90% 62%,#fff 0 26px,transparent 27px),
+  radial-gradient(circle at 30% 24%,#fff 0 20px,transparent 21px),
+  radial-gradient(circle at 70% 24%,#fff 0 20px,transparent 21px),
+  radial-gradient(circle at 50% 8%,#fff 0 14px,transparent 15px)}
+.cap h1{position:relative;margin:0;font-size:2.2rem;font-weight:700;color:#fff;text-shadow:4px 4px 0 var(--ink);letter-spacing:.02em;line-height:1.2}
+.stem{background:var(--white);border:4px solid var(--ink);padding:12px 16px;display:flex;flex-wrap:wrap;gap:10px 14px;
+  align-items:center;justify-content:center;margin-bottom:30px;box-shadow:6px 6px 0 var(--ink)}
+#ago{margin:0;color:var(--muted);font-size:.85rem}
+.pill{display:inline-flex;align-items:center;gap:8px;padding:3px 10px;border:3px solid var(--ink);background:#fff;font-size:.85rem;font-weight:500}
+.pill::before{content:"";width:12px;height:12px;border:2px solid var(--ink);background:var(--yellow)}
+.pill[data-state=ok]::before{background:var(--green)}
+.pill[data-state=bad]::before{background:var(--red)}
+
+/* cards */
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:30px 26px;margin-bottom:30px}
+.card{position:relative;background:var(--white);border:4px solid var(--ink);box-shadow:6px 6px 0 var(--ink);padding:18px 20px;min-width:0}
+.card h2{display:inline-block;margin:-18px 0 14px -20px;padding:3px 16px;background:var(--tab,var(--ink));color:#fff;
+  font-size:1rem;font-weight:600;border-right:4px solid var(--ink);border-bottom:4px solid var(--ink)}
+.t-blue{--tab:var(--blue)} .t-red{--tab:var(--red)} .t-yellow{--tab:var(--yellow)} .t-yellow h2{color:var(--ink)}
+.full{grid-column:1/-1}
+
+/* meters */
+.meter{display:flex;align-items:center;gap:16px}
+.tank{position:relative;width:78px;height:230px;margin:4px 78px 4px 6px;flex:none}
+.clip{position:absolute;inset:0;border:4px solid var(--ink);background:#fff;overflow:hidden}
+.fill{position:absolute;left:0;right:0;bottom:0;height:0;transition:height .8s steps(12)}
+#humiFill{background:repeating-linear-gradient(0deg,var(--blue) 0 14px,#5b9dff 14px 18px)}
+#tempFill{background:repeating-linear-gradient(0deg,var(--red) 0 14px,#ff5a3d 14px 18px)}
+.mark{position:absolute;left:-10px;right:-70px;height:0;border-top:3px dashed var(--ink)}
+.mark span{position:absolute;right:0;bottom:4px;background:var(--yellow);border:2px solid var(--ink);padding:0 6px;font-size:.75rem;font-weight:600;white-space:nowrap;line-height:1.4}
+.mark.below span{bottom:auto;top:4px}
+.read{min-width:0}
+.val{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:2.3rem;line-height:1.2}
+.val small{font-size:.9rem;color:var(--muted)}
+.read p{margin:12px 0 0;font-size:.95rem;font-weight:500}
+.read .scale{font-size:.78rem;color:var(--muted);font-weight:400;margin-top:4px}
+body.stale .val{opacity:.3}
+
+/* controls */
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:4px 4px 14px 0}
+.seg button{font:inherit;font-weight:600;font-size:1.05rem;padding:10px 6px;border:4px solid var(--ink);background:#fff;color:var(--ink);
+  cursor:pointer;box-shadow:4px 4px 0 var(--ink);transition:transform .08s,box-shadow .08s}
+.seg button:active{transform:translate(3px,3px);box-shadow:1px 1px 0 var(--ink)}
+.seg button[aria-checked=true]{background:var(--red);color:#fff;transform:translate(3px,3px);box-shadow:1px 1px 0 var(--ink)}
+.seg button:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:3px solid var(--soft)}
+.row b{font-size:1.1rem;font-weight:600}
+.row small{display:block;color:var(--muted);font-size:.85rem}
+.sw{position:relative;width:84px;height:40px;border:4px solid var(--ink);background:#d9cfcb;cursor:pointer;padding:0;flex:none;box-shadow:3px 3px 0 var(--ink)}
+.sw::before{content:"OFF";position:absolute;right:8px;top:50%;transform:translateY(-50%);font:8px 'Press Start 2P',monospace;color:var(--ink)}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:28px;height:28px;background:var(--white);border:3px solid var(--ink);transition:transform .15s steps(4)}
+.sw[aria-checked=true]{background:var(--sw-on)}
+.sw[aria-checked=true]::before{content:"ON";left:10px;right:auto;color:#fff}
+.sw[aria-checked=true]::after{transform:translateX(44px)}
+.sw:disabled{opacity:.5;cursor:not-allowed}
+#swFan{--sw-on:var(--green)} #swMist{--sw-on:var(--blue)}
+.hint{display:flex;gap:10px;align-items:center;margin:14px 0 0;font-size:.88rem}
+.hint::before{content:"?";flex:none;width:28px;height:28px;background:var(--yellow);border:3px solid var(--ink);display:grid;place-items:center;
+  font:12px 'Press Start 2P',monospace;box-shadow:2px 2px 0 var(--ink)}
+
+/* settings */
+.sets .set{padding:10px 0}
+.sets .set+.set{border-top:3px solid var(--soft)}
+.set label{display:flex;justify-content:space-between;gap:8px;font-size:.95rem}
+.set output{font:.8rem 'Press Start 2P',monospace;padding-top:3px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:18px;background:#fff;border:3px solid var(--ink);margin:8px 0 0;padding:0}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:28px;background:var(--red);border:3px solid var(--ink);cursor:pointer}
+input[type=range]::-moz-range-thumb{width:16px;height:22px;background:var(--red);border:3px solid var(--ink);border-radius:0;cursor:pointer}
+input[type=range]:disabled{opacity:.5}
+#setWarn{color:var(--red-d);font-size:.88rem;font-weight:500;margin:6px 0 0;min-height:1.3em}
+
+/* chart */
+canvas{width:100%;height:180px;display:block;border:4px solid var(--ink);background:#fff}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:.88rem;margin-top:10px}
+.legend i{display:inline-block;width:18px;height:6px;border:2px solid var(--ink);margin-right:6px;vertical-align:middle}
+
+/* connection */
+summary{display:inline-block;cursor:pointer;font-weight:600;border:4px solid var(--ink);background:var(--green);color:#fff;padding:4px 16px;box-shadow:4px 4px 0 var(--ink);list-style:none}
+summary::-webkit-details-marker{display:none}
+.conn{display:grid;gap:12px;margin-top:16px;background:var(--white);border:4px solid var(--ink);box-shadow:6px 6px 0 var(--ink);padding:18px 20px}
+.conn label{display:grid;gap:4px;font-size:.88rem;color:var(--muted)}
+.conn input{font:inherit;color:var(--ink);background:#fff;border:3px solid var(--ink);padding:8px 12px}
+.btn{font:inherit;font-weight:600;border:4px solid var(--ink);padding:8px 18px;background:var(--red);color:#fff;cursor:pointer;justify-self:start;box-shadow:4px 4px 0 var(--ink)}
+.btn:active{transform:translate(3px,3px);box-shadow:1px 1px 0 var(--ink)}
+#idWarn{color:var(--red-d);font-size:.88rem;font-weight:500;margin:0}
+.btns{display:flex;flex-wrap:wrap;gap:14px}
+.btn.alt{background:var(--green)}
+#shareMsg{margin:0;font-size:.88rem;font-weight:500}
+#shareMsg:empty{display:none}
+
+.ground{height:64px;margin:44px -18px 0;border-top:4px solid var(--ink);background-color:#c8542a;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' shape-rendering='crispEdges'><rect width='64' height='64' fill='%23c8542a'/><path d='M0 2H64M0 34H64M2 0V32M34 32V64' stroke='%232a1512' stroke-width='4'/></svg>")}
+
+button:focus-visible,input:focus-visible,summary:focus-visible{outline:4px solid var(--blue);outline-offset:3px}
+@media (max-width:720px){
+  .grid{grid-template-columns:1fr}
+  .cap h1{font-size:1.8rem}
+  .val{font-size:1.4rem}
+  .tank{height:200px;margin-right:72px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="cap"><h1>ฟาร์มเห็ด</h1></header>
+  <div class="stem">
+    <span class="pill" id="pMqtt" data-state="wait">กำลังเชื่อมต่อโบรกเกอร์</span>
+    <span class="pill" id="pDev" data-state="wait">อุปกรณ์: ไม่ทราบสถานะ</span>
+    <p id="ago">รอข้อมูลจากอุปกรณ์</p>
+  </div>
+
+  <div class="grid">
+    <section class="card t-blue" aria-label="ความชื้น">
+      <h2>ความชื้น</h2>
+      <div class="meter">
+        <div class="tank">
+          <div class="clip"><div class="fill" id="humiFill"></div></div>
+          <div class="mark" id="humiMaxMark"><span></span></div>
+          <div class="mark below" id="humiMinMark"><span></span></div>
+        </div>
+        <div class="read">
+          <div class="val px"><span id="humiVal">--</span><small>%</small></div>
+          <p id="humiNote">รอข้อมูลจากเซ็นเซอร์</p>
+          <p class="scale">สเกลถัง 50–100%</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card t-red" aria-label="อุณหภูมิ">
+      <h2>อุณหภูมิ</h2>
+      <div class="meter">
+        <div class="tank">
+          <div class="clip"><div class="fill" id="tempFill"></div></div>
+          <div class="mark" id="tempMaxMark"><span></span></div>
+        </div>
+        <div class="read">
+          <div class="val px"><span id="tempVal">--</span><small>°C</small></div>
+          <p id="tempNote">รอข้อมูลจากเซ็นเซอร์</p>
+          <p class="scale">สเกลถัง 15–40 °C</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>สั่งงาน</h2>
+      <div class="seg" role="radiogroup" aria-label="โหมดการทำงาน">
+        <button type="button" role="radio" id="modeManual" aria-checked="true">ทำเอง</button>
+        <button type="button" role="radio" id="modeAuto" aria-checked="false">อัตโนมัติ</button>
+      </div>
+      <div class="row">
+        <div><b>พัดลม</b><small id="fanState">หยุด</small></div>
+        <button type="button" class="sw" id="swFan" role="switch" aria-checked="false" aria-label="พัดลม"></button>
+      </div>
+      <div class="row">
+        <div><b>พ่นหมอก</b><small id="mistState">หยุด</small></div>
+        <button type="button" class="sw" id="swMist" role="switch" aria-checked="false" aria-label="พ่นหมอก"></button>
+      </div>
+      <p class="hint" id="ctlHint">รอเชื่อมต่ออุปกรณ์</p>
+    </section>
+
+    <section class="card t-yellow">
+      <h2>ค่าที่ใช้ในโหมดอัตโนมัติ</h2>
+      <div class="sets">
+        <div class="set">
+          <label for="rHumiMin">เปิดพ่นหมอกเมื่อความชื้นต่ำกว่า <output id="o_rHumiMin">85</output></label>
+          <input type="range" id="rHumiMin" min="50" max="100" step="1" value="85">
+        </div>
+        <div class="set">
+          <label for="rHumiMax">ปิดพ่นหมอกเมื่อความชื้นถึง <output id="o_rHumiMax">90</output></label>
+          <input type="range" id="rHumiMax" min="50" max="100" step="1" value="90">
+        </div>
+        <div class="set">
+          <label for="rTempMax">เปิดพัดลมเมื่ออุณหภูมิสูงกว่า <output id="o_rTempMax">28</output></label>
+          <input type="range" id="rTempMax" min="15" max="40" step="1" value="28">
+        </div>
+      </div>
+      <p id="setWarn"></p>
+    </section>
+
+    <section class="card full">
+      <h2>ย้อนหลังตั้งแต่เปิดหน้านี้</h2>
+      <canvas id="chart" aria-label="กราฟอุณหภูมิและความชื้น"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--blue)"></i>ความชื้น (50–100%)</span>
+        <span><i style="background:var(--red)"></i>อุณหภูมิ (15–40 °C)</span>
+      </div>
+    </section>
+  </div>
+
+  <details id="connBox">
+    <summary>ตั้งค่าการเชื่อมต่อ</summary>
+    <div class="conn">
+      <label>ที่อยู่โบรกเกอร์ (WebSocket)
+        <input id="inBroker" type="text" spellcheck="false">
+      </label>
+      <label>Topic ID (ต้องตรงกับค่า TOPIC_ID ในโค้ด ESP32)
+        <input id="inId" type="text" spellcheck="false">
+      </label>
+      <p id="idWarn"></p>
+      <div class="btns">
+        <button type="button" class="btn" id="btnConn">บันทึกและเชื่อมต่อ</button>
+        <button type="button" class="btn alt" id="btnShare">คัดลอกลิงก์แชร์</button>
+      </div>
+      <p id="shareMsg"></p>
+    </div>
+  </details>
+  <div class="ground" aria-hidden="true"></div>
+</div>
+
+<script>
+const DEFAULTS = { broker: 'wss://broker.hivemq.com:8884/mqtt', id: 'mushroom-CHANGE-ME-8f3k29' };
+const MAXPTS = 360;
+const $ = id => document.getElementById(id);
+
+let cfg = loadCfg();
+let client = null, mqttOk = false, online = false, lastAt = 0;
+const hist = [];
+const S = { t: null, h: null, fan: 0, mist: 0, mode: 'manual', humiMin: 85, humiMax: 90, tempMax: 28 };
+
+function loadCfg() {
+  let c;
+  try { c = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('mushroomCfg') || '{}')); }
+  catch (e) { c = Object.assign({}, DEFAULTS); }
+  // Topic ID from the share link, e.g. https://site/#id=mushroom-ab12cd34ef
+  const fromLink = new URLSearchParams(location.hash.slice(1)).get('id');
+  if (fromLink) {
+    const clean = fromLink.replace(/[^A-Za-z0-9_-]/g, '');
+    if (clean) {
+      c.id = clean;
+      try { localStorage.setItem('mushroomCfg', JSON.stringify(c)); } catch (e) {}
+    }
+  }
+  return c;
+}
+function saveCfg() { try { localStorage.setItem('mushroomCfg', JSON.stringify(cfg)); } catch (e) {} }
+const base = () => 'mushroom/' + cfg.id;
+const pct = (v, lo, hi) => Math.max(0, Math.min(1, (v - lo) / (hi - lo))) * 100;
+
+/* ---------- MQTT ---------- */
+function connect() {
+  if (typeof mqtt === 'undefined') {
+    $('pMqtt').dataset.state = 'bad';
+    $('pMqtt').textContent = 'โหลดไลบรารี MQTT ไม่ได้ ตรวจสอบอินเทอร์เน็ต';
+    return;
+  }
+  if (client) { client.removeAllListeners(); client.end(true); }
+  mqttOk = false; online = false; setPills();
+  client = mqtt.connect(cfg.broker, {
+    reconnectPeriod: 3000,
+    connectTimeout: 8000,
+    clientId: 'web-' + Math.random().toString(16).slice(2, 10)
+  });
+  client.on('connect', () => {
+    mqttOk = true; setPills();
+    client.subscribe([base() + '/telemetry', base() + '/status']);
+    sendCmd('sync', 1);
+  });
+  client.on('close', () => { mqttOk = false; online = false; setPills(); render(); });
+  client.on('message', (topic, buf) => {
+    const msg = buf.toString();
+    if (topic.endsWith('/status')) { online = (msg === 'online'); setPills(); render(); return; }
+    if (topic.endsWith('/telemetry')) {
+      try {
+        const d = JSON.parse(msg);
+        Object.assign(S, d);
+        lastAt = Date.now();
+        if (typeof d.t === 'number' && typeof d.h === 'number') {
+          hist.push({ t: d.t, h: d.h });
+          if (hist.length > MAXPTS) hist.shift();
+        }
+        render(); drawChart();
+      } catch (e) {}
+    }
+  });
+}
+function sendCmd(name, val) {
+  if (client && client.connected) client.publish(base() + '/cmd/' + name, String(val));
+}
+
+/* ---------- UI ---------- */
+function setPills() {
+  const m = $('pMqtt'), d = $('pDev');
+  m.dataset.state = mqttOk ? 'ok' : 'wait';
+  m.textContent = mqttOk ? 'เชื่อมต่อโบรกเกอร์แล้ว' : 'กำลังเชื่อมต่อโบรกเกอร์';
+  d.dataset.state = !mqttOk ? 'wait' : (online ? 'ok' : 'bad');
+  d.textContent = !mqttOk ? 'อุปกรณ์: ไม่ทราบสถานะ' : (online ? 'อุปกรณ์ออนไลน์' : 'อุปกรณ์ออฟไลน์');
+}
+function setMark(id, value, lo, hi, label) {
+  const el = $(id);
+  el.style.bottom = pct(value, lo, hi) + '%';
+  el.firstElementChild.textContent = label;
+}
+function render() {
+  const fresh = online && lastAt && (Date.now() - lastAt < 20000);
+  document.body.classList.toggle('stale', !fresh);
+
+  const h = S.h, t = S.t;
+  $('humiVal').textContent = h == null ? '--' : h.toFixed(1);
+  $('tempVal').textContent = t == null ? '--' : t.toFixed(1);
+  $('humiFill').style.height = h == null ? '0%' : pct(h, 50, 100) + '%';
+  $('tempFill').style.height = t == null ? '0%' : pct(t, 15, 40) + '%';
+  setMark('humiMinMark', S.humiMin, 50, 100, 'ต่ำสุด ' + S.humiMin);
+  setMark('humiMaxMark', S.humiMax, 50, 100, 'สูงสุด ' + S.humiMax);
+  setMark('tempMaxMark', S.tempMax, 15, 40, 'สูงสุด ' + S.tempMax);
+
+  if (h == null) $('humiNote').textContent = 'รอข้อมูลจากเซ็นเซอร์';
+  else if (h < S.humiMin) $('humiNote').textContent = 'ต่ำกว่าเกณฑ์' + (S.mist ? ' · กำลังพ่นหมอก' : '');
+  else if (h >= S.humiMax) $('humiNote').textContent = 'ถึงเกณฑ์สูงสุดแล้ว';
+  else $('humiNote').textContent = 'อยู่ในช่วงที่ตั้งไว้' + (S.mist ? ' · กำลังพ่นหมอก' : '');
+
+  if (t == null) $('tempNote').textContent = 'รอข้อมูลจากเซ็นเซอร์';
+  else if (t > S.tempMax) $('tempNote').textContent = 'สูงกว่าเกณฑ์' + (S.fan ? ' · พัดลมทำงาน' : '');
+  else $('tempNote').textContent = 'ปกติ' + (S.fan ? ' · พัดลมยังทำงาน' : '');
+
+  const isAuto = S.mode === 'auto';
+  $('modeManual').setAttribute('aria-checked', String(!isAuto));
+  $('modeAuto').setAttribute('aria-checked', String(isAuto));
+  $('modeManual').disabled = $('modeAuto').disabled = !online;
+
+  for (const [id, key, stId] of [['swFan', 'fan', 'fanState'], ['swMist', 'mist', 'mistState']]) {
+    const sw = $(id);
+    sw.setAttribute('aria-checked', String(!!S[key]));
+    sw.disabled = !online || isAuto;
+    $(stId).textContent = S[key] ? 'กำลังทำงาน' : 'หยุด';
+  }
+  $('ctlHint').textContent = !online ? 'อุปกรณ์ออฟไลน์ ยังสั่งงานไม่ได้'
+    : isAuto ? 'โหมดอัตโนมัติ: ระบบสั่งพัดลมและพ่นหมอกเองตามค่าที่ตั้ง'
+    : 'โหมดทำเอง: กดสวิตช์เพื่อสั่งงานได้ทันที';
+
+  for (const [id, key] of [['rHumiMin', 'humiMin'], ['rHumiMax', 'humiMax'], ['rTempMax', 'tempMax']]) {
+    const el = $(id);
+    if (document.activeElement !== el) { el.value = S[key]; $('o_' + id).textContent = S[key]; }
+    el.disabled = !online;
+  }
+  checkWarn();
+}
+function setsValid() { return +$('rHumiMin').value < +$('rHumiMax').value; }
+function checkWarn() {
+  $('setWarn').textContent = setsValid() ? '' : 'ความชื้นสูงสุดต้องมากกว่าค่าต่ำสุด';
+}
+
+$('modeManual').onclick = () => sendCmd('mode', 'manual');
+$('modeAuto').onclick = () => sendCmd('mode', 'auto');
+$('swFan').onclick = () => sendCmd('fan', S.fan ? 0 : 1);
+$('swMist').onclick = () => sendCmd('mist', S.mist ? 0 : 1);
+
+for (const [id, key] of [['rHumiMin', 'humiMin'], ['rHumiMax', 'humiMax'], ['rTempMax', 'tempMax']]) {
+  const el = $(id);
+  el.addEventListener('input', () => { $('o_' + id).textContent = el.value; checkWarn(); });
+  el.addEventListener('change', () => {
+    if (key === 'tempMax' || setsValid()) sendCmd(key, el.value);
+  });
+}
+
+/* ---------- chart ---------- */
+function drawChart() {
+  const c = $('chart');
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w) return;
+  const dpr = window.devicePixelRatio || 1;
+  c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext('2d');
+  g.scale(dpr, dpr);
+  const cs = getComputedStyle(document.documentElement);
+  const col = n => cs.getPropertyValue(n).trim();
+
+  g.strokeStyle = col('--soft'); g.lineWidth = 2;
+  for (let i = 0; i <= 3; i++) {
+    const y = 10 + (h - 20) * i / 3;
+    g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
+  }
+  if (hist.length < 2) {
+    g.fillStyle = col('--muted'); g.font = '14px Kanit, sans-serif';
+    g.fillText('กราฟจะเริ่มแสดงเมื่อได้รับข้อมูลอย่างน้อย 2 ครั้ง', 14, h / 2);
+    return;
+  }
+  const line = (key, lo, hi, color) => {
+    g.strokeStyle = color; g.lineWidth = 3; g.lineJoin = 'miter';
+    g.beginPath();
+    hist.forEach((p, i) => {
+      const x = i / (hist.length - 1) * w;
+      const y = 10 + (h - 20) * (1 - pct(p[key], lo, hi) / 100);
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    });
+    g.stroke();
+  };
+  line('h', 50, 100, col('--blue'));
+  line('t', 15, 40, col('--red'));
+}
+window.addEventListener('resize', drawChart);
+
+/* ---------- connection settings ---------- */
+function updateIdWarn() {
+  $('idWarn').textContent = cfg.id.includes('CHANGE-ME')
+    ? 'ยังใช้ Topic ID ตัวอย่างอยู่ ควรเปลี่ยนเป็นรหัสสุ่มของคุณเอง เพราะใครรู้ Topic นี้จะสั่งงานได้'
+    : '';
+}
+$('btnConn').onclick = () => {
+  cfg = {
+    broker: $('inBroker').value.trim() || DEFAULTS.broker,
+    id: ($('inId').value.trim().replace(/[^A-Za-z0-9_-]/g, '')) || DEFAULTS.id
+  };
+  saveCfg(); updateIdWarn();
+  hist.length = 0; lastAt = 0; S.t = S.h = null;
+  connect(); render(); drawChart();
+};
+
+$('btnShare').onclick = async () => {
+  const msg = $('shareMsg');
+  if (cfg.id.includes('CHANGE-ME')) {
+    msg.textContent = 'ยังเป็น Topic ID ตัวอย่าง ให้ตั้งรหัสของคุณและกดบันทึกก่อน';
+    return;
+  }
+  const link = location.href.split('#')[0] + '#id=' + encodeURIComponent(cfg.id);
+  let copied = true;
+  try { await navigator.clipboard.writeText(link); }
+  catch (e) { copied = false; window.prompt('คัดลอกลิงก์นี้', link); }
+  if (location.protocol === 'file:') {
+    msg.textContent = (copied ? 'คัดลอกแล้ว แต่' : '') + 'ลิงก์นี้ชี้ไปที่ไฟล์ในเครื่องคุณ คนอื่นเปิดไม่ได้ ให้อัปโหลดไฟล์ขึ้นเว็บก่อน แล้วนำ #id=' + cfg.id + ' ไปต่อท้ายที่อยู่เว็บ';
+  } else {
+    msg.textContent = 'คัดลอกลิงก์แล้ว ส่งให้เฉพาะคนที่ไว้ใจ เพราะลิงก์นี้สั่งงานได้';
+  }
+};
+
+/* ---------- start ---------- */
+$('inBroker').value = cfg.broker;
+$('inId').value = cfg.id;
+if (cfg.id.includes('CHANGE-ME')) $('connBox').open = true;
+updateIdWarn();
+setPills(); render(); drawChart(); connect();
+
+setInterval(() => {
+  const ago = $('ago');
+  if (!lastAt) { ago.textContent = 'รอข้อมูลจากอุปกรณ์'; }
+  else { ago.textContent = 'อัปเดตล่าสุด ' + Math.round((Date.now() - lastAt) / 1000) + ' วินาทีที่แล้ว'; }
+  document.body.classList.toggle('stale', !(online && lastAt && Date.now() - lastAt < 20000));
+}, 1000);
+</script>
+</body>
+</html>
